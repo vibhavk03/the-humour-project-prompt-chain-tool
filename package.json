@@ -1,0 +1,32 @@
+{
+  "name": "the-humour-project-prompt-chain-tool",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node --max-http-header-size=65536 node_modules/next/dist/bin/next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "node scripts/test-auth.mjs && node scripts/test-browser-storage.mjs && node scripts/test-chains.mjs && node scripts/test-cloud.mjs",
+    "test:chains": "node scripts/test-chains.mjs",
+    "test:cloud": "node scripts/test-cloud.mjs",
+    "test:auth": "node scripts/test-auth.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "typescript": "^5",
+    "fake-indexeddb": "^6"
+  }
+}
