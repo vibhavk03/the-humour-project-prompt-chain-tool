@@ -19,3 +19,13 @@ assert.equal((await a.all('runs')).length,1);
 await a.removeChain(chain.id);assert.equal((await a.all('chains')).length,0);assert.equal((await a.all('runs')).length,0);
 assert.equal((await b.all('chains')).length,1,'deleting one account chain does not delete another account chain');
 console.log('Browser storage tests passed: account isolation, persistence, revision conflicts, and deletion cascades.');
+
+// Cloud import reads this account's previous data without exposing another account's backup.
+const legacyCode=ts.transpileModule(readFileSync(new URL('../app/chains/legacy-storage.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const legacyContext={exports:{},indexedDB};vm.runInNewContext(legacyCode,legacyContext);
+const backupA=await legacyContext.exports.browserBackup('00000000-0000-4000-8000-000000000001');
+const backupB=await legacyContext.exports.browserBackup('00000000-0000-4000-8000-000000000002');
+assert.equal(backupA.chains.length,0);
+assert.equal(backupB.chains.length,1);
+assert.equal((await b.all('chains')).length,1,'reading import backup preserves local originals');
+console.log('Cloud import backup tests passed: account-scoped reads and preserved originals.');

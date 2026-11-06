@@ -4,7 +4,7 @@ begin;
 
 create table if not exists public.prompt_studio_chains (
   id uuid primary key,
-  owner_id uuid, -- Reserved for the later login implementation.
+  owner_id uuid default auth.uid(), -- Existing unowned rows remain inaccessible.
   name text not null check (length(btrim(name)) between 1 and 100),
   description text not null default '' check (length(description) <= 500),
   revision integer not null default 1,
@@ -45,16 +45,51 @@ create table if not exists public.prompt_studio_media_cleanup (
   created_at timestamptz not null default now()
 );
 
+-- Upgrade the earlier prepared schema without assigning legacy data to a user.
+alter table public.prompt_studio_chains alter column owner_id set default auth.uid();
+alter table public.prompt_studio_media_cleanup add column if not exists owner_id uuid default auth.uid();
+
+create or replace function public.prompt_studio_is_admin()
+returns boolean language sql stable security invoker set search_path = '' as $$
+  select exists(select 1 from public.profiles where id = auth.uid() and is_admin = true);
+$$;
+revoke all on function public.prompt_studio_is_admin() from public, anon;
+grant execute on function public.prompt_studio_is_admin() to authenticated, service_role;
+
 alter table public.prompt_studio_chains enable row level security;
 alter table public.prompt_studio_steps enable row level security;
 alter table public.prompt_studio_runs enable row level security;
 alter table public.prompt_studio_step_runs enable row level security;
 alter table public.prompt_studio_media_cleanup enable row level security;
--- No anonymous policies. Only the app's server credential accesses these tables.
+-- Session-authenticated access, restricted to each admin account.
 revoke all on public.prompt_studio_chains, public.prompt_studio_steps, public.prompt_studio_runs,
   public.prompt_studio_step_runs, public.prompt_studio_media_cleanup from anon, authenticated;
+grant select, insert, update, delete on public.prompt_studio_chains, public.prompt_studio_steps, public.prompt_studio_runs,
+  public.prompt_studio_step_runs, public.prompt_studio_media_cleanup to authenticated;
 grant all on public.prompt_studio_chains, public.prompt_studio_steps, public.prompt_studio_runs,
   public.prompt_studio_step_runs, public.prompt_studio_media_cleanup to service_role;
+
+-- Child policies inherit ownership and admin access through the parent chain.
+drop policy if exists studio_owner on public.prompt_studio_chains;
+create policy studio_owner on public.prompt_studio_chains for all to authenticated
+  using (owner_id = auth.uid() and public.prompt_studio_is_admin())
+  with check (owner_id = auth.uid() and public.prompt_studio_is_admin());
+drop policy if exists studio_owner on public.prompt_studio_steps;
+create policy studio_owner on public.prompt_studio_steps for all to authenticated
+  using (exists(select 1 from public.prompt_studio_chains c where c.id = chain_id))
+  with check (exists(select 1 from public.prompt_studio_chains c where c.id = chain_id));
+drop policy if exists studio_owner on public.prompt_studio_runs;
+create policy studio_owner on public.prompt_studio_runs for all to authenticated
+  using (exists(select 1 from public.prompt_studio_chains c where c.id = chain_id))
+  with check (exists(select 1 from public.prompt_studio_chains c where c.id = chain_id));
+drop policy if exists studio_owner on public.prompt_studio_step_runs;
+create policy studio_owner on public.prompt_studio_step_runs for all to authenticated
+  using (exists(select 1 from public.prompt_studio_runs r where r.id = run_id))
+  with check (exists(select 1 from public.prompt_studio_runs r where r.id = run_id));
+drop policy if exists studio_owner on public.prompt_studio_media_cleanup;
+create policy studio_owner on public.prompt_studio_media_cleanup for all to authenticated
+  using (owner_id = auth.uid() and public.prompt_studio_is_admin())
+  with check (owner_id = auth.uid() and public.prompt_studio_is_admin());
 
 create or replace function public.prompt_studio_save_chain(p_chain jsonb, p_expected_revision integer)
 returns jsonb language plpgsql security invoker set search_path = '' as $$
@@ -144,11 +179,29 @@ $$;
 revoke all on function public.prompt_studio_save_chain(jsonb,integer) from public, anon, authenticated;
 revoke all on function public.prompt_studio_save_run(jsonb) from public, anon, authenticated;
 revoke all on function public.prompt_studio_delete_chain(uuid) from public, anon, authenticated;
-grant execute on function public.prompt_studio_save_chain(jsonb,integer) to service_role;
-grant execute on function public.prompt_studio_save_run(jsonb) to service_role;
-grant execute on function public.prompt_studio_delete_chain(uuid) to service_role;
+grant execute on function public.prompt_studio_save_chain(jsonb,integer) to authenticated, service_role;
+grant execute on function public.prompt_studio_save_run(jsonb) to authenticated, service_role;
+grant execute on function public.prompt_studio_delete_chain(uuid) to authenticated, service_role;
 
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
 values ('prompt-studio-media','prompt-studio-media',false,4194304,array['image/png','image/jpeg','image/webp'])
-on conflict(id) do nothing;
+on conflict(id) do update set public = false, file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+-- Object ownership survives chain deletion so queued cleanup can still delete files.
+drop policy if exists studio_media_read on storage.objects;
+create policy studio_media_read on storage.objects for select to authenticated
+  using (bucket_id = 'prompt-studio-media' and owner_id = auth.uid()::text and public.prompt_studio_is_admin());
+drop policy if exists studio_media_insert on storage.objects;
+create policy studio_media_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'prompt-studio-media' and owner_id = auth.uid()::text
+    and exists(select 1 from public.prompt_studio_chains c where c.id::text = split_part(storage.objects.name,'/',1)));
+drop policy if exists studio_media_update on storage.objects;
+create policy studio_media_update on storage.objects for update to authenticated
+  using (bucket_id = 'prompt-studio-media' and owner_id = auth.uid()::text and public.prompt_studio_is_admin())
+  with check (bucket_id = 'prompt-studio-media' and owner_id = auth.uid()::text
+    and exists(select 1 from public.prompt_studio_chains c where c.id::text = split_part(storage.objects.name,'/',1)));
+drop policy if exists studio_media_delete on storage.objects;
+create policy studio_media_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'prompt-studio-media' and owner_id = auth.uid()::text and public.prompt_studio_is_admin());
 commit;

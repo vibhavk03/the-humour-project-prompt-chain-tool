@@ -7,7 +7,5 @@ export async function requireAccount():Promise<Response|null> {
   return null;
 }
 export async function requireCloudAccess():Promise<Response|null> {
-  const blocked=await requireAccount();
-  if (blocked) return blocked;
-  return Response.json({error:'Cloud storage is paused while sign-in is being verified. Chains are saved in this browser. The authenticated database migration comes next.'},{status:503});
+  return requireAccount();
 }

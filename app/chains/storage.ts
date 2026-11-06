@@ -1,6 +1,6 @@
 import type { Chain, Run } from './model';
-// Login-first mode: each account gets a separate browser workspace. Cloud saving
-// remains inactive until the authenticated database migration is prepared.
+// Previous account-scoped browser storage, retained for backup compatibility and tests.
+// The studio now writes to cloud-storage.ts.
 export function createBrowserStorage(userId:string) {
   if (!/^[a-f\d-]{36}$/i.test(userId)) throw new Error('Invalid account workspace.');
   function database():Promise<IDBDatabase> {

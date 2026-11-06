@@ -1,26 +1,29 @@
 import 'server-only';
+import { serverClient } from '../supabase/server';
+import { authConfig } from '../supabase/config';
 import type { Chain, Media, Run, Step, StepResult } from '../chains/model';
 import { displayedMedia, storedMedia, StudioError } from './studio-validation';
 export const bucket = 'prompt-studio-media';
 
-export function configuration() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new StudioError('Cloud saving needs a Supabase URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) in .env.local. Add the server key and restart the app.',503);
-  return { url: url.replace(/\/$/,''), key };
-}
 export async function supabase(path: string, init: RequestInit = {}): Promise<Response> {
-  const { url, key } = configuration();
+  const config = authConfig();
+  if (!config) throw new StudioError('Cloud saving needs the Supabase URL and publishable key.',503);
+  const client = await serverClient();
+  const session = await client?.auth.getSession();
+  if (session?.error || !session?.data.session) throw new StudioError('Sign in again to save your workspace.',401);
+  const url = config.url.replace(/\/$/,'');
+  const key = config.key;
+  const token = session.data.session.access_token;
   let response: Response;
   try {
     response = await fetch(`${url}${path}`, { ...init, cache:'no-store', signal: AbortSignal.timeout(30000),
-      headers: { apikey:key, Authorization:`Bearer ${key}`, ...init.headers } });
+      headers: { apikey:key, Authorization:`Bearer ${token}`, ...init.headers } });
   } catch { throw new StudioError('Could not reach Supabase. Your changes have not been saved. Try again.',502); }
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     if (error.code === '40001') throw new StudioError('This chain changed in another tab or device. Reload the workspace before saving so you do not overwrite those changes.',409);
     if (['42P01','PGRST202','PGRST205'].includes(error.code)) throw new StudioError('Cloud tables are not ready. Run supabase/prompt-studio.sql in the Supabase SQL Editor.',503);
-    if (response.status === 401 || response.status === 403 || error.code === '42501') throw new StudioError('Supabase access was denied. Check the server secret key and run the SQL migration.',503);
+    if (response.status === 401 || response.status === 403 || error.code === '42501') throw new StudioError('Supabase access was denied. Run the authenticated SQL migration and verify your account permissions.',503);
     if (error.code === '23503') throw new StudioError('This chain was deleted elsewhere. Reload your workspace.',409);
     if (error.code === '22023') throw new StudioError('The saved run snapshot cannot be changed. Start a new run.',409);
     throw new StudioError('Supabase could not save or load this data. Check the database migration and Storage bucket, then retry.',502);
@@ -50,7 +53,7 @@ export async function loadChains(): Promise<Chain[]> {
 export async function loadRuns(): Promise<Run[]> {
   const data = await rows<RunRow>('prompt_studio_runs?select=*,prompt_studio_step_runs(*)&order=created_at.desc,id.asc');
   return Promise.all(data.map(async r => {
-    const run: Run = {id:r.id,chainId:r.chain_id,chainName:r.chain_name,createdAt:r.created_at,input:displayedMedia(r.input),status:r.status,
+    const run: Run = {id:r.id,chainId:r.chain_id,chainName:r.chain_name,createdAt:r.created_at,updatedAt:r.updated_at,input:displayedMedia(r.input),status:r.status,
       results:r.prompt_studio_step_runs.sort((a,b)=>a.position-b.position).map(s=>({step:s.step_snapshot,status:s.status,
         ...(s.output ? {output:displayedMedia(s.output)} : {}),...(s.error ? {error:s.error} : {}),...(s.model ? {model:s.model} : {})}))};
     // Another browser opening the workspace must not interrupt an active run.

@@ -41,7 +41,9 @@ const access=load('app/auth/api-access.ts',{'./account':{enforceAdmin:true,getAc
 assert.equal((await access.requireAccount()).status,401);
 state={account:{id:currentUser.id,isAdmin:false},problem:null};assert.equal((await access.requireAccount()).status,403);
 state={account:{id:currentUser.id,isAdmin:true},problem:null};assert.equal(await access.requireAccount(),null);
-assert.equal((await access.requireCloudAccess()).status,503,'cloud migration is explicitly paused');
+assert.equal(await access.requireCloudAccess(),null,'verified admins can use cloud persistence');
+state={account:{id:currentUser.id,isAdmin:false},problem:null};assert.equal((await access.requireCloudAccess()).status,403);
+state={account:null,problem:null};assert.equal((await access.requireCloudAccess()).status,401);
 state={account:null,problem:'configuration'};assert.equal((await access.requireAccount()).status,503);
 
 let exchangeError=null,exchangeCount=0,verifyCount=0;

@@ -8,7 +8,8 @@ const nativeFetch=fetch;
 const root=new URL('../',import.meta.url);
 const contexts=new Map();
 let fetcher;
-const processEnv={SUPABASE_URL:'https://project.supabase.co',SUPABASE_SECRET_KEY:'server-test-secret'};
+const processEnv={NEXT_PUBLIC_SUPABASE_URL:'https://project.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'publishable-test-key'};
+let sessionToken='user-session-token';
 function module(path) {
   if(contexts.has(path)) return contexts.get(path).exports;
   const source=readFileSync(new URL(path,root),'utf8');
@@ -16,6 +17,7 @@ function module(path) {
   const exports={};contexts.set(path,{exports});
   const context={exports,Buffer,URL,Request,Response,AbortSignal,Uint8Array,atob,process:{env:processEnv},fetch:(...args)=>fetcher(...args),require:(name)=>{
     if(name==='server-only')return {};
+    if(name==='../supabase/server')return {serverClient:async()=>({auth:{getSession:async()=>({data:{session:sessionToken?{access_token:sessionToken}:null},error:null})}})};
     if(name.endsWith('auth/api-access')) return {requireCloudAccess:async()=>null};
     if(name.startsWith('.')) return module(new URL(`${name}.ts`,new URL(path,root)).pathname.slice(root.pathname.length));
     return require(name);
@@ -40,7 +42,8 @@ const put=value=>new Request('http://localhost/api/studio',{method:'PUT',headers
 let response=await routes.PUT(put({store:'chains',value:chain}));
 assert.equal(response.status,200);assert.equal((await response.json()).revision,2);
 assert.equal(JSON.parse(requests.at(-1).init.body).p_expected_revision,1);
-assert.equal(requests.at(-1).init.headers.apikey,'server-test-secret');
+assert.equal(requests.at(-1).init.headers.apikey,'publishable-test-key');
+assert.equal(requests.at(-1).init.headers.Authorization,'Bearer user-session-token');
 response=await routes.PUT(put({store:'runs',value:run}));assert.equal(response.status,200);
 const before=requests.length;
 response=await routes.PUT(put({store:'chains',value:{...chain,steps:[step,step]}}));assert.equal(response.status,400);
@@ -52,9 +55,12 @@ fetcher=async()=>Response.json({code:'40001'},{status:409});
 response=await routes.PUT(put({store:'chains',value:chain}));assert.equal(response.status,409);
 fetcher=async()=>Response.json({code:'PGRST202'},{status:404});
 response=await routes.GET(new Request('http://localhost/api/studio?store=chains'));assert.equal(response.status,503);assert.match((await response.json()).error,/SQL Editor/);
-delete processEnv.SUPABASE_SECRET_KEY;
-response=await routes.GET(new Request('http://localhost/api/studio?store=chains'));assert.equal(response.status,503);assert.match((await response.json()).error,/SUPABASE_SECRET_KEY/);
-processEnv.SUPABASE_SECRET_KEY='server-test-secret';
+delete processEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+response=await routes.GET(new Request('http://localhost/api/studio?store=chains'));assert.equal(response.status,503);assert.match((await response.json()).error,/publishable key/);
+processEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY='publishable-test-key';
+sessionToken=null;
+response=await routes.GET(new Request('http://localhost/api/studio?store=chains'));assert.equal(response.status,401);
+sessionToken='user-session-token';
 
 // Image uploads are binary, idempotent, private, and use durable relative URLs.
 requests=[];
